@@ -113,29 +113,52 @@ function doPost(e) {
       return ContentService.createTextOutput("No data received");
     }
 
-    // Parse interactive button payload
     const params = e.parameter;
 
     if (params.payload) {
-      const payload = JSON.parse(params.payload);  // Slack sends form-urlencoded with `payload=...`
+      const payload = JSON.parse(params.payload);
       const action = payload.actions?.[0];
       const actionName = action?.name;
+      const messageId = action?.value;
+
+      // ✅ Respond early to Slack to avoid timeout
+      const response = ContentService.createTextOutput("").setMimeType(ContentService.MimeType.TEXT);
+
+      // ⚠️ Check for valid messageId
+      if (!messageId) {
+        UrlFetchApp.fetch(payload.response_url, {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({
+            text: `❌ Missing or invalid message ID.`,
+            replace_original: true
+          })
+        });
+        return response;
+      }
+
+      let message;
+      try {
+        message = GmailApp.getMessageById(messageId);
+      } catch (err) {
+        UrlFetchApp.fetch(payload.response_url, {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({
+            text: `❌ Email not found or already deleted.`,
+            replace_original: true
+          })
+        });
+        return response;
+      }
+
+      const from = message.getFrom();
+      const subject = message.getSubject() || "(No Subject)";
 
       if (actionName === "delete") {
-        const messageId = action.value;
+        message.moveToTrash();
 
-        const response = ContentService.createTextOutput(""); // empty response
-        response.setMimeType(ContentService.MimeType.TEXT);
-        //Utilities.sleep(100);
-
-        // Gmail logic
-        const message = GmailApp.getMessageById(messageId);
-        
-
-        const from = message.getFrom();
-        const subject = message.getSubject() || "(No Subject)";
-
-       UrlFetchApp.fetch(payload.response_url, {
+        UrlFetchApp.fetch(payload.response_url, {
           method: "post",
           contentType: "application/json",
           payload: JSON.stringify({
@@ -144,24 +167,9 @@ function doPost(e) {
           })
         });
 
-        message.moveToTrash();
-        return response;
-      }
-      else if (actionName === "ignore_email") {
-        const messageId = action.value;
+      } else if (actionName === "ignore_email") {
 
-        const response = ContentService.createTextOutput(""); // empty response
-        response.setMimeType(ContentService.MimeType.TEXT);
-        //Utilities.sleep(100);
-
-        // Gmail logic
-        const message = GmailApp.getMessageById(messageId);
-        
-
-        const from = message.getFrom();
-        const subject = message.getSubject() || "(No Subject)";
-
-       UrlFetchApp.fetch(payload.response_url, {
+        UrlFetchApp.fetch(payload.response_url, {
           method: "post",
           contentType: "application/json",
           payload: JSON.stringify({
@@ -169,15 +177,21 @@ function doPost(e) {
             replace_original: true
           })
         });
-
-        //message.markRead();
-        return response;
+      } else {
+        UrlFetchApp.fetch(payload.response_url, {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({
+            text: `⚠️ Unknown action: ${actionName}`,
+            replace_original: false
+          })
+        });
       }
 
-      return ContentService.createTextOutput("Unhandled action " + JSON.stringify(action));
+      return response;
     }
 
-    // Slash command support (e.g., /reply)
+    // Handle slash command: /reply
     if (params.command === "/reply") {
       const [messageId, ...replyParts] = params.text.trim().split(" ");
       const replyText = replyParts.join(" ");
